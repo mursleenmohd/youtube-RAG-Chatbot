@@ -86,8 +86,12 @@ class YouTubeRAGEngine:
 
         context = "\n\n".join(matched_chunks[:4]) if matched_chunks else "General YouTube video transcript context."
 
+        # Prompt Template with Strict Timestamp Rule Restored
         prompt_template = """You are an AI assistant answering questions based on a YouTube video transcript.
 Answer the question accurately using ONLY the context provided below.
+
+IMPORTANT INSTRUCTION FOR TIMESTAMPS:
+Whenever you extract or present information from the context, always include the relevant timestamp in the exact format `[MM:SS]` (e.g., [01:23] or [05:40]) right beside the explanation.
 
 Context:
 {context}
