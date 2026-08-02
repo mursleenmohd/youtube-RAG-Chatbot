@@ -14,9 +14,25 @@ CORS(app)
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
 
-# MySQL Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
+db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
+
+# Clean any ssl-mode parameters if passed from URL
+if "?ssl-mode=" in db_url or "&ssl-mode=" in db_url:
+    db_url = db_url.split("?ssl-mode=")[0].split("&ssl-mode=")[0]
+
+if db_url.startswith("mysql://"):
+    db_url = db_url.replace("mysql://", "mysql+pymysql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Force SSL connection settings for Aiven Cloud MySQL
+if "aivencloud.com" in db_url:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        "connect_args": {
+            "ssl": {"ssl_mode": "REQUIRED"}
+        }
+    }
 
 db.init_app(app)
 rag_engine = YouTubeRAGEngine()
