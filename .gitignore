@@ -1,0 +1,20 @@
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# Environment Secrets
+.env
+
+# Python Cache
+__pycache__/
+*.py[cod]
+vector_stores/
+
+# Node Dependencies (Frontend)
+frontend/node_modules/
+frontend/dist/
+
+# System files
+.DS_Store
+Thumbs.db

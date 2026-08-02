@@ -1,0 +1,161 @@
+import os
+import jwt
+from functools import wraps
+from flask import Flask, request, jsonify, Response, stream_with_context
+from flask_cors import CORS
+from rag_pipeline import YouTubeRAGEngine
+from models import db, Video, ChatMessage, User
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app)
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
+
+# MySQL Configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'mysql+pymysql://root:password@localhost:3306/youtube_rag_db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+rag_engine = YouTubeRAGEngine()
+
+with app.app_context():
+    db.create_all()
+
+# JWT Authentication Decorator
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'error': 'Token is missing!'}), 401
+        try:
+            if token.startswith("Bearer "):
+                token = token.split(" ")[1]
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            current_user = User.query.get(data['user_id'])
+            if not current_user:
+                return jsonify({'error': 'Invalid User!'}), 401
+        except Exception as e:
+            return jsonify({'error': 'Token is invalid or expired!'}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+# 1. Signup Endpoint
+@app.route("/api/auth/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    if not username or not email or not password:
+        return jsonify({"error": "All fields are required"}), 400
+
+    if User.query.filter((User.username == username) | (User.email == email)).first():
+        return jsonify({"error": "User with this email or username already exists"}), 400
+
+    new_user = User(username=username, email=email)
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({"message": "User registered successfully!"}), 201
+
+# 2. Login Endpoint
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    token = jwt.encode({"user_id": user.id}, SECRET_KEY, algorithm="HS256")
+    return jsonify({
+        "message": "Login successful",
+        "token": token,
+        "username": user.username
+    }), 200
+
+# 3. User Specific Videos List
+@app.route("/api/videos", methods=["GET"])
+@token_required
+def get_user_videos(current_user):
+    try:
+        videos = Video.query.filter_by(user_id=current_user.id).order_by(Video.created_at.desc()).all()
+        video_list = [{"id": v.id, "video_id": v.video_id, "url": v.url} for v in videos]
+        return jsonify({"videos": video_list}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 4. User Specific Chat History
+@app.route("/api/history/<video_id>", methods=["GET"])
+@token_required
+def get_chat_history(current_user, video_id):
+    try:
+        messages = ChatMessage.query.filter_by(user_id=current_user.id, video_id=video_id).order_by(ChatMessage.timestamp.asc()).all()
+        history = [{"sender": msg.sender, "text": msg.message} for msg in messages]
+        return jsonify({"history": history}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 5. Process Video Endpoint
+@app.route("/api/process-video", methods=["POST"])
+@token_required
+def process_video(current_user):
+    data = request.get_json()
+    video_url = data.get("video_url")
+    if not video_url:
+        return jsonify({"error": "video_url is required"}), 400
+
+    try:
+        rag_engine.process_video(video_url)
+        video_id = rag_engine._extract_video_id(video_url)
+
+        existing_video = Video.query.filter_by(user_id=current_user.id, video_id=video_id).first()
+        if not existing_video:
+            new_video = Video(user_id=current_user.id, video_id=video_id, url=video_url)
+            db.session.add(new_video)
+            db.session.commit()
+
+        return jsonify({"message": "Video indexed!", "video_id": video_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 6. Stream Chat Endpoint
+@app.route("/api/chat-stream", methods=["POST"])
+@token_required
+def chat_stream(current_user):
+    data = request.get_json()
+    question = data.get("question")
+    video_id = data.get("video_id")
+
+    if not question or not video_id:
+        return jsonify({"error": "question and video_id are required"}), 400
+
+    def generate():
+        full_answer = ""
+        try:
+            for chunk in rag_engine.stream_answer(video_id, question):
+                full_answer += chunk
+                yield chunk
+
+            with app.app_context():
+                user_msg = ChatMessage(user_id=current_user.id, video_id=video_id, sender='user', message=question)
+                bot_msg = ChatMessage(user_id=current_user.id, video_id=video_id, sender='bot', message=full_answer)
+                db.session.add(user_msg)
+                db.session.add(bot_msg)
+                db.session.commit()
+        except Exception as e:
+            yield f" [Error: {str(e)}]"
+
+    return Response(stream_with_context(generate()), content_type='text/plain; charset=utf-8')
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
