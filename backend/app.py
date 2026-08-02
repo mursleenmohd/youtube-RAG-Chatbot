@@ -1,8 +1,11 @@
 import os
 import jwt
+import random
+import string
 from functools import wraps
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
+from flask_mail import Mail, Message
 from rag_pipeline import YouTubeRAGEngine
 from models import db, Video, ChatMessage, User
 from dotenv import load_dotenv
@@ -10,10 +13,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+
+# 1. Enable CORS for all origins (Fixes Vercel Connection Issues)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
 
+# Database URL Handling
 db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
 
 # Clean any ssl-mode parameters if passed from URL
@@ -34,11 +40,28 @@ if "aivencloud.com" in db_url:
         }
     }
 
+# 2. Flask-Mail Configuration for OTP
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+
+mail = Mail(app)
+
+# Temporary in-memory OTP storage {email: otp_code}
+otp_store = {}
+
 db.init_app(app)
 rag_engine = YouTubeRAGEngine()
 
 with app.app_context():
     db.create_all()
+
+# Root Health Route (Prevents 404 on base URL)
+@app.route("/", methods=["GET"])
+def health_check():
+    return jsonify({"status": "Backend is live and running!"}), 200
 
 # JWT Authentication Decorator
 def token_required(f):
@@ -59,7 +82,7 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
-# 1. Signup Endpoint
+# 1. Signup Endpoint (Fixed Duplicate Registration Check)
 @app.route("/api/auth/register", methods=["POST"])
 def register():
     data = request.get_json()
@@ -70,8 +93,12 @@ def register():
     if not username or not email or not password:
         return jsonify({"error": "All fields are required"}), 400
 
-    if User.query.filter((User.username == username) | (User.email == email)).first():
-        return jsonify({"error": "User with this email or username already exists"}), 400
+    # Strict check: Block duplicate email or username with clear 400 error
+    existing_user = User.query.filter((User.username == username) | (User.email == email)).first()
+    if existing_user:
+        if existing_user.email == email:
+            return jsonify({"error": "Email is already registered. Please log in or reset password."}), 400
+        return jsonify({"error": "Username is already taken. Choose another one."}), 400
 
     new_user = User(username=username, email=email)
     new_user.set_password(password)
@@ -98,7 +125,63 @@ def login():
         "username": user.username
     }), 200
 
-# 3. User Specific Videos List
+# 3. Forgot Password - Send OTP to Email
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "No account found with this email!"}), 404
+
+    # Generate random 6-digit OTP
+    otp = ''.join(random.choices(string.digits, k=6))
+    otp_store[email] = otp
+
+    # Send Email via Flask-Mail
+    try:
+        msg = Message("Your Password Reset Code - RAG AI",
+                      sender=os.getenv('MAIL_USERNAME'),
+                      recipients=[email])
+        msg.body = f"Hello {user.username},\n\nYour 6-digit verification code to reset your password is: {otp}\n\nIf you did not request this, please ignore this email."
+        mail.send(msg)
+        return jsonify({"message": "OTP code sent to your email!"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+
+# 4. Reset Password - Verify OTP & Update Password
+@app.route("/api/auth/reset-password", methods=["POST"])
+def reset_password():
+    data = request.get_json()
+    email = data.get("email")
+    user_otp = data.get("otp")
+    new_password = data.get("password")
+
+    if not email or not user_otp or not new_password:
+        return jsonify({"error": "All fields are required!"}), 400
+
+    # Verify OTP Code
+    if email not in otp_store or otp_store[email] != str(user_otp):
+        return jsonify({"error": "Invalid or expired OTP code!"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found!"}), 404
+
+    # Update Password
+    user.set_password(new_password)
+    db.session.commit()
+
+    # Clear used OTP
+    del otp_store[email]
+
+    return jsonify({"message": "Password updated successfully! You can now log in."}), 200
+
+# 5. User Specific Videos List
 @app.route("/api/videos", methods=["GET"])
 @token_required
 def get_user_videos(current_user):
@@ -109,7 +192,7 @@ def get_user_videos(current_user):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 4. User Specific Chat History
+# 6. User Specific Chat History
 @app.route("/api/history/<video_id>", methods=["GET"])
 @token_required
 def get_chat_history(current_user, video_id):
@@ -120,7 +203,7 @@ def get_chat_history(current_user, video_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 5. Process Video Endpoint
+# 7. Process Video Endpoint
 @app.route("/api/process-video", methods=["POST"])
 @token_required
 def process_video(current_user):
@@ -143,7 +226,7 @@ def process_video(current_user):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 6. Stream Chat Endpoint
+# 8. Stream Chat Endpoint
 @app.route("/api/chat-stream", methods=["POST"])
 @token_required
 def chat_stream(current_user):
