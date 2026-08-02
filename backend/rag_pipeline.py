@@ -1,4 +1,5 @@
 import os
+import requests
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -8,7 +9,6 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
-# In-memory document store to prevent Pinecone dimension / API crash on free cloud servers
 video_docs_store = {}
 
 class YouTubeRAGEngine:
@@ -28,22 +28,44 @@ class YouTubeRAGEngine:
             return url.split("youtu.be/")[1].split("?")[0]
         return url
 
+    def _fetch_transcript_safe(self, video_id: str):
+        # 1. Try standard transcript
+        try:
+            return YouTubeTranscriptApi.get_transcript(video_id)
+        except Exception as e:
+            print(f"Standard API failed: {e}")
+
+        # 2. Try third-party transcript API fallback (Free Supadata/Piped API)
+        try:
+            res = requests.get(f"https://pipedapi.kavin.rocks/subtitles/{video_id}?lang=en", timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data and len(data) > 0:
+                    sub_url = data[0]['url']
+                    sub_res = requests.get(sub_url, timeout=10).json()
+                    formatted = []
+                    for item in sub_res:
+                        formatted.append({
+                            "text": item.get("text", ""),
+                            "start": item.get("start", 0)
+                        })
+                    return formatted
+        except Exception as e:
+            print(f"Fallback Piped API failed: {e}")
+
+        # Return empty list if no transcript found
+        return []
+
     def process_video(self, video_url: str):
         video_id = self._extract_video_id(video_url)
 
         if video_id in video_docs_store:
-            print(f"Video {video_id} already in memory!")
             return True
 
-        # Fetch Transcript
-        try:
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        except Exception as e:
-            print(f"YouTube Transcript Fetch Warning: {str(e)}")
-            transcript_list = [
-                {"text": "This video provides detailed code execution, setup guide, and project walkthrough.", "start": 0},
-                {"text": "Key sections explain architecture, database schemas, and API integration details.", "start": 60}
-            ]
+        transcript_list = self._fetch_transcript_safe(video_id)
+
+        if not transcript_list:
+            raise ValueError("Captions/Subtitles are unavailable or disabled for this video.")
 
         formatted_chunks = []
         for item in transcript_list:
@@ -63,17 +85,12 @@ class YouTubeRAGEngine:
             chunk_overlap=150
         )
         docs = text_splitter.create_documents([full_text])
-
-        # Store in memory per video_id
         video_docs_store[video_id] = [doc.page_content for doc in docs]
-
-        print(f"Successfully processed and indexed video {video_id}")
         return True
 
     def stream_answer(self, video_id: str, question: str):
         docs = video_docs_store.get(video_id, [])
         
-        # Simple & ultra-fast text context extraction
         matched_chunks = []
         q_words = [w.lower() for w in question.split() if len(w) > 3]
         
@@ -84,14 +101,13 @@ class YouTubeRAGEngine:
         if not matched_chunks:
             matched_chunks = docs[:4]
 
-        context = "\n\n".join(matched_chunks[:4]) if matched_chunks else "General YouTube video transcript context."
+        context = "\n\n".join(matched_chunks[:4]) if matched_chunks else "No relevant context found."
 
-        # Prompt Template with Strict Timestamp Rule Restored
         prompt_template = """You are an AI assistant answering questions based on a YouTube video transcript.
 Answer the question accurately using ONLY the context provided below.
 
 IMPORTANT INSTRUCTION FOR TIMESTAMPS:
-Whenever you extract or present information from the context, always include the relevant timestamp in the exact format `[MM:SS]` (e.g., [01:23] or [05:40]) right beside the explanation.
+Whenever you extract information, always mention the relevant timestamp in format `[MM:SS]` (e.g. [01:23]).
 
 Context:
 {context}
