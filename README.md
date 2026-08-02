@@ -52,3 +52,4 @@ youtube-RAG-Chatbot/
 │   └── .env.example             # Frontend Environment Variables Example
 │
 └── README.md                    # Project Documentation
+
