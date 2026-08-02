@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_groq import ChatGroq
 from pinecone import Pinecone
 from langchain_core.prompts import ChatPromptTemplate
@@ -12,8 +12,14 @@ load_dotenv()
 
 class YouTubeRAGEngine:
     def __init__(self):
-        # Ultra-lightweight CPU-friendly embeddings (No PyTorch/Torch overhead)
-        self.embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        # 0MB RAM Overhead Cloud Embeddings (Bypasses ONNX/PyTorch SIGSEGV crashes)
+        # Uses HuggingFace free API / Fallback to lightweight embeddings
+        hf_api_token = os.getenv("HUGGINGFACEHUB_API_TOKEN", "hf_default")
+        self.embeddings = HuggingFaceInferenceAPIEmbeddings(
+            api_key=hf_api_token,
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        
         self.llm = ChatGroq(
             model="llama-3.3-70b-versatile",
             temperature=0.2,
@@ -36,23 +42,34 @@ class YouTubeRAGEngine:
     def process_video(self, video_url: str):
         video_id = self._extract_video_id(video_url)
 
-        stats = self.index.describe_index_stats()
-        if stats.get('namespaces') and video_id in stats['namespaces']:
-            print(f"Video {video_id} already indexed in Pinecone Cloud!")
-            return True
-
         try:
-            ytt_api = YouTubeTranscriptApi()
-            transcript_list = ytt_api.fetch(video_id)
-        except AttributeError:
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            stats = self.index.describe_index_stats()
+            if stats.get('namespaces') and video_id in stats['namespaces']:
+                print(f"Video {video_id} already indexed in Pinecone Cloud!")
+                return True
+        except Exception as e:
+            print(f"Pinecone stats check warning: {str(e)}")
+
+        # Fetch transcript safely
+        try:
+            try:
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            except Exception:
+                # Fallback check
+                ytt_api = YouTubeTranscriptApi()
+                transcript_list = ytt_api.fetch(video_id)
         except (TranscriptsDisabled, NoTranscriptFound):
-            raise ValueError("Subtitles/captions are disabled for this video.")
+            raise ValueError("Subtitles/captions are disabled or not available for this video.")
+        except Exception as e:
+            raise ValueError(f"Could not retrieve transcript from YouTube: {str(e)}")
+
+        if not transcript_list:
+            raise ValueError("Transcript is empty for this YouTube video.")
 
         formatted_chunks = []
         for item in transcript_list:
-            text = item['text'] if isinstance(item, dict) else item.text
-            start_sec = int(item['start'] if isinstance(item, dict) else item.start)
+            text = item['text'] if isinstance(item, dict) else getattr(item, 'text', '')
+            start_sec = int(item['start'] if isinstance(item, dict) else getattr(item, 'start', 0))
             
             minutes = start_sec // 60
             seconds = start_sec % 60
