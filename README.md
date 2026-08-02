@@ -27,7 +27,7 @@ An end-to-end full-stack AI application that enables users to interactively chat
 
 ---
 
-## Repository Directory Structure
+## 📂 Repository Directory Structure
 
 ```text
 youtube-RAG-Chatbot/
@@ -52,4 +52,48 @@ youtube-RAG-Chatbot/
 │   └── .env.example             # Frontend Environment Variables Example
 │
 └── README.md                    # Project Documentation
+
+🛠️ Tech Stack
+Frontend
+   -Framework: React.js (Vite)
+   -Styling: CSS3 (Glassmorphism UI, Responsive Flexbox/Grid)
+
+Deployment: Vercel
+
+Backend
+  -Framework: Python / Flask
+  -WSGI Server: Gunicorn
+
+Deployment: Render
+
+AI & Vector Pipeline
+ -Orchestration: LangChain
+ -LLM: Groq API (llama-3.3-70b-versatile)
+ -Vector Database: Pinecone
+ -Text Processing: langchain-text-splitters (RecursiveCharacterTextSplitter)
+ -Transcripts: youtube-transcript-api with fallback proxy handling
+
+🚀 Getting Started Locally
+Prerequisites
+  -Python 3.10+
+  -Accounts for Groq, Pinecone, and MySQL
+
+Backend Setup
+# Clone the repository
+git clone [https://github.com/mursleenmohd/youtube-RAG-Chatbot.git](https://github.com/mursleenmohd/youtube-RAG-Chatbot.git)
+cd youtube-RAG-Chatbot/backend
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+🌐 Live Demo & Deployment Links
+ Live Web Application: https://youtube-rag-chatbot-mu.vercel.app/
+
+ Backend API: https://youtube-rag-chatbot-qirb.onrender.com
+
+ GitHub Repository: https://github.com/mursleenmohd/youtube-RAG-Chatbot
 
