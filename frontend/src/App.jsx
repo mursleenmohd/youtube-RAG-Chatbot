@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import Auth from './Auth';
 import './App.css';
 
-const API_BASE_URL = "http://localhost:5000/api";
+// Dynamic API Base URL (Render Cloud Fallback)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://youtube-rag-chatbot-qirb.onrender.com/api";
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
@@ -97,6 +98,7 @@ function App() {
     if (!vId) return setStatusMessage({ type: 'error', text: 'Invalid URL' });
 
     setLoadingVideo(true);
+    setStatusMessage({ type: '', text: '' });
     try {
       const res = await fetch(`${API_BASE_URL}/process-video`, {
         method: 'POST',
@@ -112,10 +114,10 @@ function App() {
         await fetchChatHistory(vId);
         await fetchSavedVideos();
       } else {
-        setStatusMessage({ type: 'error', text: data.error });
+        setStatusMessage({ type: 'error', text: data.error || 'Failed to process video' });
       }
     } catch (err) {
-      setStatusMessage({ type: 'error', text: 'Server error' });
+      setStatusMessage({ type: 'error', text: 'Server error: Connection failed' });
     } finally {
       setLoadingVideo(false);
     }
