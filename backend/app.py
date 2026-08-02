@@ -2,10 +2,10 @@ import os
 import jwt
 import random
 import string
+import resend
 from functools import wraps
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-from flask_mail import Mail, Message
 from rag_pipeline import YouTubeRAGEngine
 from models import db, Video, ChatMessage, User
 from dotenv import load_dotenv
@@ -14,10 +14,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# 1. Enable CORS for all origins (Fixes Vercel Connection Issues)
+
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
+
+# Resend API Key Configuration
+resend.api_key = os.getenv("RESEND_API_KEY", "re_AbdAtEjh_P1KohQxeDwdbe84887oNpJkV")
 
 # Database URL Handling
 db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
@@ -39,15 +42,6 @@ if "aivencloud.com" in db_url:
             "ssl": {"ssl_mode": "REQUIRED"}
         }
     }
-
-# 2. Flask-Mail Configuration for OTP
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-
-mail = Mail(app)
 
 # Temporary in-memory OTP storage {email: otp_code}
 otp_store = {}
@@ -125,33 +119,47 @@ def login():
         "username": user.username
     }), 200
 
-# 3. Forgot Password - Send OTP to Email
+# 3. Forgot Password - Send OTP via Resend HTTP API
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def forgot_password():
-    data = request.get_json()
-    email = data.get("email")
-
-    if not email:
-        return jsonify({"error": "Email is required"}), 400
-
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({"error": "No account found with this email!"}), 404
-
-    # Generate random 6-digit OTP
-    otp = ''.join(random.choices(string.digits, k=6))
-    otp_store[email] = otp
-
-    # Send Email via Flask-Mail
     try:
-        msg = Message("Your Password Reset Code - RAG AI",
-                      sender=os.getenv('MAIL_USERNAME'),
-                      recipients=[email])
-        msg.body = f"Hello {user.username},\n\nYour 6-digit verification code to reset your password is: {otp}\n\nIf you did not request this, please ignore this email."
-        mail.send(msg)
+        data = request.get_json() or {}
+        email = data.get("email")
+
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "No account found with this email!"}), 404
+
+        # Generate random 6-digit OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+        otp_store[email] = otp
+
+        # Send Email via Resend API
+        resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": email,
+            "subject": "Your Password Reset Code - RAG AI",
+            "html": f"""
+                <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #0f172a; color: #ffffff; border-radius: 8px;">
+                    <h2 style="color: #38bdf8;">Password Reset Request</h2>
+                    <p>Hello <strong>{user.username}</strong>,</p>
+                    <p>Your 6-digit verification code to reset your password is:</p>
+                    <div style="background-color: #1e293b; font-size: 24px; font-weight: bold; letter-spacing: 4px; padding: 12px 20px; width: fit-content; border-radius: 6px; color: #38bdf8;">
+                        {otp}
+                    </div>
+                    <p style="margin-top: 20px; font-size: 12px; color: #94a3b8;">If you did not request this, please ignore this email.</p>
+                </div>
+            """
+        })
+
         return jsonify({"message": "OTP code sent to your email!"}), 200
+
     except Exception as e:
-        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+        print("RESEND API MAIL ERROR:", str(e))
+        return jsonify({"error": f"Failed to send OTP email: {str(e)}"}), 500
 
 # 4. Reset Password - Verify OTP & Update Password
 @app.route("/api/auth/reset-password", methods=["POST"])
