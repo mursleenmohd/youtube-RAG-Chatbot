@@ -18,7 +18,7 @@ app = Flask(__name__)
 # 1. Enable CORS for all origins
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123_456_789_32bytes_long")
 
 # Brevo API Setup
 configuration = sib_api_v3_sdk.Configuration()
