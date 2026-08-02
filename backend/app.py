@@ -15,7 +15,7 @@ CORS(app)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
 
 # MySQL Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'mysql+pymysql://root:password@localhost:3306/youtube_rag_db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
