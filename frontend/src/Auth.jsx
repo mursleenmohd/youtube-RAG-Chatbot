@@ -16,47 +16,62 @@ function Auth({ onAuthSuccess }) {
     setAlertMsg({ type: '', text: '' });
     setLoading(true);
 
-    const endpoint = isLogin ? '/auth/login' : '/auth/register';
+    // Standard Flask API Auth Endpoints
+    const endpointsToTry = isLogin 
+      ? ['/api/auth/login', '/auth/login', '/api/login'] 
+      : ['/api/auth/register', '/auth/register', '/api/register'];
+      
     const payload = isLogin ? { email, password } : { username, email, password };
 
-    try {
-      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
+    let success = false;
 
-      if (res.ok) {
-        if (isLogin) {
-          localStorage.setItem('token', data.token);
-          localStorage.setItem('username', data.username);
-          onAuthSuccess(data.username, data.token);
-        } else {
-          setIsLogin(true);
-          setAlertMsg({ type: 'info', text: 'Account created! Log in below.' });
-          setPassword('');
+    for (const endpoint of endpointsToTry) {
+      try {
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        // Agar route mil gaya (404 nahi aaya)
+        if (res.status !== 404) {
+          const data = await res.json();
+          if (res.ok) {
+            if (isLogin) {
+              localStorage.setItem('token', data.token);
+              localStorage.setItem('username', data.username);
+              onAuthSuccess(data.username, data.token);
+            } else {
+              setIsLogin(true);
+              setAlertMsg({ type: 'info', text: 'Account created! Log in below.' });
+              setPassword('');
+            }
+          } else {
+            setAlertMsg({ type: 'error', text: data.error || 'Authentication failed.' });
+          }
+          success = true;
+          break; // Stop loop once valid endpoint responds
         }
-      } else {
-        setAlertMsg({ type: 'error', text: data.error || 'Authentication failed.' });
+      } catch (err) {
+        console.error("Connection attempt failed for:", endpoint, err);
       }
-    } catch (err) {
-      setAlertMsg({ type: 'error', text: 'Unable to connect to server.' });
-    } finally {
-      setLoading(false);
     }
+
+    if (!success) {
+      setAlertMsg({ type: 'error', text: 'Unable to connect to server. Ensure backend is awake.' });
+    }
+
+    setLoading(false);
   };
 
   return (
     <div className="auth-container">
-      {/* Blurred Mosaic Cards Background */}
       <div className="auth-bg-grid">
         {[...Array(15)].map((_, i) => (
           <div key={i} className="bg-card"></div>
         ))}
       </div>
 
-      {}
       <div className="auth-card">
         <div className="auth-brand-logo">🎬</div>
         
