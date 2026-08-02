@@ -2,7 +2,8 @@ import os
 import jwt
 import random
 import string
-import resend
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
 from functools import wraps
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
@@ -14,18 +15,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-
+# 1. Enable CORS for all origins
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
 
-# Resend API Key Configuration
-resend.api_key = os.getenv("RESEND_API_KEY")
+# Brevo API Setup
+configuration = sib_api_v3_sdk.Configuration()
+configuration.api_key['api-key'] = os.getenv("BREVO_API_KEY")
 
 # Database URL Handling
 db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
 
-# Clean any ssl-mode parameters if passed from URL
 if "?ssl-mode=" in db_url or "&ssl-mode=" in db_url:
     db_url = db_url.split("?ssl-mode=")[0].split("&ssl-mode=")[0]
 
@@ -35,7 +36,6 @@ if db_url.startswith("mysql://"):
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Force SSL connection settings for Aiven Cloud MySQL
 if "aivencloud.com" in db_url:
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         "connect_args": {
@@ -52,7 +52,7 @@ rag_engine = YouTubeRAGEngine()
 with app.app_context():
     db.create_all()
 
-# Root Health Route (Prevents 404 on base URL)
+# Root Health Route
 @app.route("/", methods=["GET"])
 def health_check():
     return jsonify({"status": "Backend is live and running!"}), 200
@@ -76,7 +76,7 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
-# 1. Signup Endpoint (Fixed Duplicate Registration Check)
+# 1. Signup Endpoint
 @app.route("/api/auth/register", methods=["POST"])
 def register():
     data = request.get_json()
@@ -87,7 +87,6 @@ def register():
     if not username or not email or not password:
         return jsonify({"error": "All fields are required"}), 400
 
-    # Strict check: Block duplicate email or username with clear 400 error
     existing_user = User.query.filter((User.username == username) | (User.email == email)).first()
     if existing_user:
         if existing_user.email == email:
@@ -119,7 +118,7 @@ def login():
         "username": user.username
     }), 200
 
-# 3. Forgot Password - Send OTP via Resend HTTP API
+# 3. Forgot Password - Send OTP via Brevo API to Any User Email
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def forgot_password():
     try:
@@ -133,16 +132,16 @@ def forgot_password():
         if not user:
             return jsonify({"error": "No account found with this email!"}), 404
 
-        # Generate random 6-digit OTP
         otp = ''.join(random.choices(string.digits, k=6))
         otp_store[email] = otp
 
-        # Send Email via Resend API
-        resend.Emails.send({
-            "from": "onboarding@resend.dev",
-            "to": email,
-            "subject": "Your Password Reset Code - RAG AI",
-            "html": f"""
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+        
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=[{"email": email, "name": user.username}],
+            sender={"name": "RAG AI Support", "email": "mursleenmohd827@gmail.com"},
+            subject="Your Password Reset Code - RAG AI",
+            html_content=f"""
                 <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #0f172a; color: #ffffff; border-radius: 8px;">
                     <h2 style="color: #38bdf8;">Password Reset Request</h2>
                     <p>Hello <strong>{user.username}</strong>,</p>
@@ -153,13 +152,17 @@ def forgot_password():
                     <p style="margin-top: 20px; font-size: 12px; color: #94a3b8;">If you did not request this, please ignore this email.</p>
                 </div>
             """
-        })
+        )
 
+        api_instance.send_transac_email(send_smtp_email)
         return jsonify({"message": "OTP code sent to your email!"}), 200
 
-    except Exception as e:
-        print("RESEND API MAIL ERROR:", str(e))
+    except ApiException as e:
+        print("BREVO API ERROR:", str(e))
         return jsonify({"error": f"Failed to send OTP email: {str(e)}"}), 500
+    except Exception as e:
+        print("SERVER ERROR:", str(e))
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 # 4. Reset Password - Verify OTP & Update Password
 @app.route("/api/auth/reset-password", methods=["POST"])
@@ -172,7 +175,6 @@ def reset_password():
     if not email or not user_otp or not new_password:
         return jsonify({"error": "All fields are required!"}), 400
 
-    # Verify OTP Code
     if email not in otp_store or otp_store[email] != str(user_otp):
         return jsonify({"error": "Invalid or expired OTP code!"}), 400
 
@@ -180,11 +182,9 @@ def reset_password():
     if not user:
         return jsonify({"error": "User not found!"}), 404
 
-    # Update Password
     user.set_password(new_password)
     db.session.commit()
 
-    # Clear used OTP
     del otp_store[email]
 
     return jsonify({"message": "Password updated successfully! You can now log in."}), 200
