@@ -20,7 +20,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your_super_secret_jwt_key_123")
 
 # Resend API Key Configuration
-resend.api_key = os.getenv("RESEND_API_KEY", "re_AbdAtEjh_P1KohQxeDwdbe84887oNpJkV")
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 # Database URL Handling
 db_url = os.getenv('DATABASE_URL', 'mysql+pymysql://root:Mursleen%40999@localhost:3306/youtube_rag_db')
